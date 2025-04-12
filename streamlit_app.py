@@ -1,151 +1,73 @@
 import streamlit as st
 import pandas as pd
-import math
-from pathlib import Path
+import plotly.express as px
+from st_aggrid import AgGrid, GridOptionsBuilder
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+# Page config
+st.set_page_config(page_title="Student Data Dashboard", layout="wide")
+st.title("📊 Student Data by Region")
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+# Load the data
+file_path = "data/students_byregion_for_analysis.csv"
+df = pd.read_csv(file_path)
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+# Clean region names
+regions = df['region'].str.strip()
+df['region'] = regions
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+# Sidebar filters
+st.sidebar.header("🔍 Filter Data")
+selected_regions = st.sidebar.multiselect("Select Regions", options=df['region'].unique(), default=df['region'].unique())
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+min_pop, max_pop = st.sidebar.slider("Filter by Current Student Population", 
+                                     min_value=int(df['curr_stu_pop'].min()), 
+                                     max_value=int(df['curr_stu_pop'].max()),
+                                     value=(int(df['curr_stu_pop'].min()), int(df['curr_stu_pop'].max())))
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+# Filter data
+filtered_df = df[(df['region'].isin(selected_regions)) & 
+                 (df['curr_stu_pop'] >= min_pop) & (df['curr_stu_pop'] <= max_pop)]
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+# Display filtered data table
+st.subheader("📋 Filtered Data Table")
+gb = GridOptionsBuilder.from_dataframe(filtered_df)
+gb.configure_pagination()
+gb.configure_side_bar()
+gb.configure_default_column(groupable=True, value=True, enableRowGroup=True, editable=False)
+grid_options = gb.build()
+AgGrid(filtered_df, gridOptions=grid_options, enable_enterprise_modules=True, height=300)
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+# Visualizations
+st.subheader("📈 Visual Analytics")
 
-    return gdp_df
+# Graduates vs Entrants
+fig1 = px.bar(filtered_df, x='region', y=['graduates', 'entrants'], barmode='group', title='Graduates vs Entrants by Region')
+st.plotly_chart(fig1, use_container_width=True)
 
-gdp_df = get_gdp_data()
+# Preschool Distribution
+preschool_df = filtered_df[['region', 'no_preschool', '1y_preschool', '2y_preschool', '3y_preschool']].melt(id_vars='region',
+    var_name='Preschool Duration', value_name='Count')
+fig2 = px.bar(preschool_df, x='region', y='Count', color='Preschool Duration', title='Preschool Duration Distribution',
+              barmode='stack')
+st.plotly_chart(fig2, use_container_width=True)
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+# Gender Pie
+st.subheader("👧 Gender Distribution")
+for _, row in filtered_df.iterrows():
+    st.markdown(f"### {row['region']}")
+    fig = px.pie(names=['Female', 'Male'], values=[row['female'], row['curr_stu_pop'] - row['female']],
+                 title=f"Gender Ratio in {row['region']}")
+    st.plotly_chart(fig, use_container_width=True)
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
+# Grade-wise student numbers
+grade_cols = [col for col in df.columns if col.startswith('grade')]
+grade_df = filtered_df[['region'] + grade_cols].melt(id_vars='region', var_name='Grade', value_name='Students')
+fig3 = px.line(grade_df, x='Grade', y='Students', color='region', markers=True, title='Grade-wise Student Numbers')
+st.plotly_chart(fig3, use_container_width=True)
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
+# Estimated 2024 Graduates Histogram
+fig4 = px.histogram(filtered_df, x='est_2024_grads', nbins=20, title='Distribution of Estimated 2024 Graduates')
+st.plotly_chart(fig4, use_container_width=True)
 
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+st.markdown("---")
+st.caption("Dashboard built with ❤️ using Streamlit and Plotly")
